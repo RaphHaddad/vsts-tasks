@@ -9,9 +9,9 @@ var os = require('os');
 var minimist = require('minimist');
 var mocha = require('gulp-mocha');
 var Q = require('q');
-var request = require('request');
 var semver = require('semver');
 var shell = require('shelljs');
+var syncRequest = require('sync-request');
 
 // gulp modules
 var del = require('del');
@@ -285,18 +285,12 @@ var cacheArchiveFile = function (url) {
         shell.rm('-rf', partialPath);
     }
 
-    // Download the archilve file.
+    // Download the archive file.
     var file = fs.createWriteStream(path.join(partialPath, 'download'));
-    request.get(url)
-        .on('response', function (response) {
-            if (response.statusCode != 200) {
-                throw new Error('File download error. HTTP status code: ' + response.statusCode);
-            }
-        })
-        .on('error', function (err) {
-            throw new Error('File download error: ' + err);
-        })
-        .pipe(file);
+    var result = syncRequest('GET', url);
+    fs.writeFileSync(file, result.getBody());
+    //unzi
+
 /*
 									file.on('finish', function () {
 										file.close();
