@@ -246,7 +246,7 @@ function packageTask(pkgPath, commonDeps, commonSrc) {
 					shell.rm(path.join(tgtPath, '*.csproj'));
 					shell.rm(path.join(tgtPath, '*.md'));
 
-					// Build a list of external task lib dependencies.
+					// Build a list of execution handler external dependencies.
 					var externals = require('./externals.json');
 					var libDeps = [];
 					if (task.execution['Node']) {
@@ -265,7 +265,7 @@ function packageTask(pkgPath, commonDeps, commonSrc) {
 						});
 					}
 
-					// Statically link the required external task libs.
+					// Statically link the execution handler dependencies.
 					libDeps.forEach(function (libDep) {
 						// Validate the lib name against the externals.json dictionary.
 						var libVer = externals[libDep.name];
@@ -287,7 +287,30 @@ function packageTask(pkgPath, commonDeps, commonSrc) {
 						shell.cp('-R', path.join(tskLibSrc, '*'), dest);
 					})
 
-					// Statically link the required internal common modules.
+					// Statically link task-specific externals.
+					var nestedExternalsJsons = shell.find(tgtPath).
+						filter(function (file) {
+							return file.match(/(\/|\\)externals\.json$/);
+						});
+					nestedExternalsJsons.forEach(function (nestedExternalsJson) {
+						// Load the externals.json.
+						var nestedExternals = require(nestedExternalsJson);
+
+						// Walk the array of archive file references (e.g. zip files).
+						if (nestedExternals.archivePackages) {
+							nestedExternals.archivePackages.forEach(function (archive) {
+								// Copy the archive directory.
+								gutil.log('Linking files from ' + archive.archiveName);
+								var archiveTarget = path.join(path.dirname(nestedExternalsJson), archive.dest);
+								var scrubbedUrl = url.replace(/[/\:?]/, '_');
+								var archiveSource = path.join(_downloadPath, "archive", scrubbedUrl);
+								shell.mkdir('-p', archiveTarget);
+								shell.cp('-R', archiveSource, archiveTarget);
+							});
+						}
+					});
+
+					// Statically link the internal common modules.
 					var taskDeps;
 					if ((taskDeps = commonDeps[task.name])) {
 						taskDeps.forEach(function (dep) {
@@ -314,75 +337,6 @@ function packageTask(pkgPath, commonDeps, commonSrc) {
 							throw new Error('npm install failed');
 						}
 						shell.popd();
-					}
-
-					// download any dependencies
-					var alldependenciesjson = shell.find(tgtPath).
-						filter(function (file) {
-							return file.match(/(\/|\\)dependencies\.json$/);
-						});
-
-					var finisheddependenciesjson = 0;
-					if (alldependenciesjson) {
-						if (alldependenciesjson.length == 0) {
-							deferred.resolve();
-						}
-
-						alldependenciesjson.forEach(function (dependenciesjson) {
-							var dependencies = require(dependenciesjson);
-							if (dependencies.archivePackages) {
-								// Download and extract archive packages.
-								var archives = dependencies.archivePackages;
-								var finishedarchiveCount = 0;
-								archives.forEach(function (archive) {
-									gutil.log('Download archive dependency: ' + archive.archiveName + ' from: ' + archive.url);
-
-									var file = fs.createWriteStream(path.join(_tempPath, archive.archiveName));
-									request.get(archive.url)
-										.on('response', function (response) {
-											if (response.statusCode != 200) {
-												throw new Error('file download error. Http status code: ' + response.statusCode);
-											}
-										})
-										.on('error', function (err) {
-											throw new Error('file download error: ' + err);
-										})
-										.pipe(file);
-
-									file.on('finish', function () {
-										file.close();
-										gutil.log('Unzip to: ' + path.join(path.dirname(dependenciesjson), archive.dest));
-										gulp.src(path.join(_tempPath, archive.archiveName))
-											.pipe(unzip())
-											.pipe(gulp.dest(path.join(path.dirname(dependenciesjson), archive.dest)))
-											.on('end', function () {
-												gutil.log('Validate download files.');
-												archive.files.forEach(function (file) {
-													gutil.log('Checking download file:' + file);
-													if (!fs.existsSync(path.join(path.dirname(dependenciesjson), archive.dest, file))) {
-														throw new Error('File expected does not exist: ' + path.join(path.dirname(dependenciesjson), archive.dest, file));
-													}
-												})
-
-												gutil.log('Remove download .zip file.');
-												shell.rm(path.join(_tempPath, archive.archiveName));
-												finishedarchiveCount++;
-												if (finishedarchiveCount == archives.length) {
-													finisheddependenciesjson++;
-													if (finisheddependenciesjson == alldependenciesjson.length) {
-														gutil.log('Finished all dependencies download.');
-														deferred.resolve();
-													}
-												}
-											});
-									});
-								});
-							} else {
-								deferred.resolve();
-							}
-						});
-					} else {
-						deferred.resolve();
 					}
 				}));
 
