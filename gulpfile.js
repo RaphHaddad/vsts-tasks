@@ -6,6 +6,7 @@ var path = require('path');
 var os = require('os');
 
 // build/test script
+var admZip = require('adm-zip');
 var minimist = require('minimist');
 var mocha = require('gulp-mocha');
 var Q = require('q');
@@ -286,48 +287,21 @@ var cacheArchiveFile = function (url) {
     }
 
     // Download the archive file.
-    var file = fs.createWriteStream(path.join(partialPath, 'download'));
+    var file = fs.createWriteStream(path.join(partialPath, 'file.zip'));
     var result = syncRequest('GET', url);
     fs.writeFileSync(file, result.getBody());
-    //unzi
 
-/*
-									file.on('finish', function () {
-										file.close();
-										gutil.log('Unzip to: ' + path.join(path.dirname(dependenciesjson), archive.dest));
-										gulp.src(path.join(_tempPath, archive.archiveName))
-											.pipe(unzip())
-											.pipe(gulp.dest(path.join(path.dirname(dependenciesjson), archive.dest)))
-											.on('end', function () {
-												gutil.log('Validate download files.');
-												archive.files.forEach(function (file) {
-													gutil.log('Checking download file:' + file);
-													if (!fs.existsSync(path.join(path.dirname(dependenciesjson), archive.dest, file))) {
-														throw new Error('File expected does not exist: ' + path.join(path.dirname(dependenciesjson), archive.dest, file));
-													}
-												})
+    // Extract the archive file.
+    console.log("Extracting archive.");
+    var directory = path.join(partialPath, "dir");
+    var zip = new admZip(file);
+    zip.extractAllTo(directory);
 
-												gutil.log('Remove download .zip file.');
-												shell.rm(path.join(_tempPath, archive.archiveName));
-												finishedarchiveCount++;
-												if (finishedarchiveCount == archives.length) {
-													finisheddependenciesjson++;
-													if (finisheddependenciesjson == alldependenciesjson.length) {
-														gutil.log('Finished all dependencies download.');
-														deferred.resolve();
-													}
-												}
-											});
-									});
-								});
-							} else {
-								deferred.resolve();
-							}
-						});
-					} else {
-						deferred.resolve();
-					}
-*/
+    // Move the extracted directory.
+    shell.mv(directory, targetPath);
+
+    // Remove the remaining partial directory.
+    shell.rm('-rf', partialPath);
 }
 
 var cacheNpmPackage = function (name, version) {
