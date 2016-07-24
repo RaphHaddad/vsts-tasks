@@ -14,6 +14,7 @@ var stream = require('stream');
 
 var _strRelPath = path.join('Strings', 'resources.resjson', 'en-US');
 
+var _downloadPath = path.join(__dirname, '_download');
 var _tempPath = path.join(__dirname, '_temp');
 shell.mkdir('-p', _tempPath);
 
@@ -27,6 +28,7 @@ var validateModule = function (folderName, module) {
     return defer.promise;
 }
 
+// Validates the structure of a task.json file.
 var validateTask = function (folderName, task) {
 	var defer = Q.defer();
 
@@ -265,17 +267,21 @@ function packageTask(pkgPath, commonDeps, commonSrc) {
 
 					// Statically link the required external task libs.
 					libDeps.forEach(function (libDep) {
+						// Validate the lib name against the externals.json dictionary.
 						var libVer = externals[libDep.name];
 						if (!libVer) {
 							throw new Error('External ' + libDep.name + ' not defined in externals.json.');
 						}
 
 						gutil.log('Linking ' + libDep.name + ' ' + libVer + ' into ' + task.name);
-						var tskLibSrc = path.join(__dirname, '_temp', libDep.name, libVer, libDep.src);
+
+						// Validate the copy source directory exists.
+						var tskLibSrc = path.join(_downloadPath, 'npm', libDep.name, libVer, libDep.src);
 						if (shell.test('-d', tskLibSrc)) {
 							new gutil.PluginError('PackageTask', libDep.name + ' not found: ' + tskLibSrc);
 						}
 
+						// Copy the files.
 						var dest = path.join(tgtPath, libDep.dest)
 						shell.mkdir('-p', dest);
 						shell.cp('-R', path.join(tskLibSrc, '*'), dest);
@@ -325,6 +331,7 @@ function packageTask(pkgPath, commonDeps, commonSrc) {
 						alldependenciesjson.forEach(function (dependenciesjson) {
 							var dependencies = require(dependenciesjson);
 							if (dependencies.archivePackages) {
+								// Download and extract archive packages.
 								var archives = dependencies.archivePackages;
 								var finishedarchiveCount = 0;
 								archives.forEach(function (archive) {

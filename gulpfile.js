@@ -9,6 +9,7 @@ var os = require('os');
 var minimist = require('minimist');
 var mocha = require('gulp-mocha');
 var Q = require('q');
+var request = require('request');
 var semver = require('semver');
 var shell = require('shelljs');
 
@@ -73,6 +74,7 @@ var _testTemp = path.join(_testRoot, 'Temp');
 var _pkgRoot = path.join(__dirname, '_package');
 var _oldPkg = path.join(__dirname, 'Package');
 var _wkRoot = path.join(__dirname, '_working');
+var _downloadPath = path.join(__dirname, '_download');
 var _tempPath = path.join(__dirname, '_temp');
 
 //-----------------------------------------------------------------------------------------------------------------
@@ -93,15 +95,43 @@ gulp.task('clean', function (cb) {
 // compile tasks inline
 gulp.task('compileTasks', ['clean'], function (cb) {
     try {
-        getNpmExternal('vsts-task-lib');
-        getNpmExternal('vsts-task-sdk');
+        // Cache all externals in the _download directory.
+        var allExternalsJson = shell.find(path.join(__dirname, 'Tasks'))
+            .filter(function (file) {
+                return match(/(\/|\\)externals\.json$/);
+            })
+            .concat(path.join(__dirname, 'externals.json'));
+        allExternalsJson.forEach(function (externalsJson) {
+            // Load the externals.json file.
+            console.Log('Loading ' + externalsJson);
+            var externals = require(externalsJson);
+
+            // Check for NPM externals.
+            if (externals.npm) {
+                // Walk the dictionary.
+                var packageNames = Object.keys(externals.npm);
+                packageNames.forEach(function (packageName) {
+                    // Cache the NPM package.
+                    var packageVersion = externals.npm[packageName];
+                    cacheNpmPackage(packageName, packageVersion);
+                });
+            }
+
+            // Check for archive files.
+            if (externals.archivePackages) {
+                // Walk the array.
+                externals.archivePackages.forEach(function (archive) {
+                    // Cache the archive file.
+                    cacheArchiveFile(archive.url);
+                });
+            }
+        });
     }
     catch (err) {
         console.log('error:' + err.message);
         cb(new gutil.PluginError('compileTasks', err.message));
         return;
     }
-
 
     var tasksPath = path.join(__dirname, 'Tasks', '**/*.ts');
     return gulp.src([tasksPath, 'definitions/*.d.ts'], { base: './Tasks' })
@@ -234,18 +264,107 @@ gulp.task('bumpps', function () {
     }
 });
 
-var getNpmExternal = function (name) {
-    var externals = require('./externals.json');
-    var libVer = externals[name];
-    if (!libVer) {
-        throw new Error('External module not defined in externals.json: ' + name);
+var cacheArchiveFile = function (url) {
+    // Validate the parameters.
+    if (!url) {
+        throw new Error('Parameter "url" cannot be null or empty.');
     }
 
-    gutil.log('acquiring ' + name + ': ' + libVer);
+    // Short-circuit if already downloaded.
+    console.log('Downloading archive file ' + url);
+    var scrubbedUrl = url.replace(/[/\:?]/, '_');
+    var targetPath = path.join(_downloadPath, 'archive', scrubbedUrl);
+    if (shell.test('-d', targetPath)) {
+        console.log('Archive already cached. Skipping.');
+        return;
+    }
 
-    var libPath = path.join(_tempPath, name, libVer);
-    shell.mkdir('-p', path.join(libPath, 'node_modules'));
+    // Delete any previous partial attempt.
+    var partialPath = path.join(_downloadPath, 'partial', 'archive', scrubbedUrl);
+    if (shell.test('-d', partialPath)) {
+        shell.rm('-rf', partialPath);
+    }
 
+    // Download the archilve file.
+    var file = fs.createWriteStream(path.join(partialPath, 'download'));
+    request.get(url)
+        .on('response', function (response) {
+            if (response.statusCode != 200) {
+                throw new Error('File download error. HTTP status code: ' + response.statusCode);
+            }
+        })
+        .on('error', function (err) {
+            throw new Error('File download error: ' + err);
+        })
+        .pipe(file);
+/*
+									file.on('finish', function () {
+										file.close();
+										gutil.log('Unzip to: ' + path.join(path.dirname(dependenciesjson), archive.dest));
+										gulp.src(path.join(_tempPath, archive.archiveName))
+											.pipe(unzip())
+											.pipe(gulp.dest(path.join(path.dirname(dependenciesjson), archive.dest)))
+											.on('end', function () {
+												gutil.log('Validate download files.');
+												archive.files.forEach(function (file) {
+													gutil.log('Checking download file:' + file);
+													if (!fs.existsSync(path.join(path.dirname(dependenciesjson), archive.dest, file))) {
+														throw new Error('File expected does not exist: ' + path.join(path.dirname(dependenciesjson), archive.dest, file));
+													}
+												})
+
+												gutil.log('Remove download .zip file.');
+												shell.rm(path.join(_tempPath, archive.archiveName));
+												finishedarchiveCount++;
+												if (finishedarchiveCount == archives.length) {
+													finisheddependenciesjson++;
+													if (finisheddependenciesjson == alldependenciesjson.length) {
+														gutil.log('Finished all dependencies download.');
+														deferred.resolve();
+													}
+												}
+											});
+									});
+								});
+							} else {
+								deferred.resolve();
+							}
+						});
+					} else {
+						deferred.resolve();
+					}
+*/
+}
+
+var cacheNpmPackage = function (name, version) {
+    // Validate the parameters.
+    if (!name) {
+        throw new Error('Parameter "name" cannot be null or empty.');
+    }
+
+    if (!version) {
+        throw new Error('Parameter "version" cannot be null or empty.');
+    }
+
+    // Short-circuit if already downloaded.
+    gutil.log('Downloading npm package ' + name + '@' + version);
+    var targetPath = path.join(_downloadPath, 'npm', name, version);
+    if (shell.test('-d', targetPath)) {
+        console.log('Package already cached. Skipping.');
+        return;
+    }
+
+    // Delete any previous partial attempt.
+    var partialPath = path.join(_downloadPath, 'partial', 'npm', name, version);
+    if (shell.test('-d', partialPath)) {
+        shell.rm('-rf', partialPath);
+    }
+
+    // Write a temporary package.json file to npm install warnings.
+    //
+    // Note, write the file higher up in the directory hierarchy so it is not included
+    // when the partial directory is moved into the target location
+    shell.mkdir('-p', partialPath, 'node_modules');
     var pkg = {
         "name": "temp",
         "version": "1.0.0",
@@ -260,39 +379,40 @@ var getNpmExternal = function (name) {
         "author": "",
         "license": "MIT"
     };
-    fs.writeFileSync(path.join(_tempPath, 'package.json'), JSON.stringify(pkg, null, 2));
+    fs.writeFileSync(
+        path.join(_downloadPath, 'partial', 'npm', 'package.json'),
+        JSON.stringify(pkg, null, 2));
 
-    shell.pushd(libPath);
-    var completedPath = path.join(libPath, 'installcompleted');
-    if (shell.test('-f', completedPath)) {
-        console.log('Package already installed. Skipping.');
-        shell.popd();
-        return;
-    }
-
+    // Validate npm is in the PATH.
     var npmPath = shell.which('npm');
     if (!npmPath) {
         throw new Error('npm not found.  ensure npm 3 or greater is installed');
     }
 
-    var s = cp.execSync('"' + npmPath + '" --version');
-    var ver = s.toString().replace(/[\n\r]+/g, '')
-    console.log('version: "' + ver + '"');
-
-    if (semver.lt(ver, NPM_MIN_VER)) {
-        throw new Error('NPM version must be at least ' + NPM_MIN_VER + '. Found ' + ver);
+    // Validate the version of npm.
+    var versionOutput = cp.execSync('"' + npmPath + '" --version');
+    var npmVersion = versionOutput.toString().replace(/[\n\r]+/g, '')
+    console.log('npm version: "' + npmVersion + '"');
+    if (semver.lt(npmVersion, NPM_MIN_VER)) {
+        throw new Error('npm version must be at least ' + NPM_MIN_VER + '. Found ' + npmVersion);
     }
 
-    var cmdline = '"' + npmPath + '" install ' + name + '@' + libVer;
-    var res = cp.execSync(cmdline);
-    gutil.log(res.toString());
-
-    shell.popd();
-    if (res.status > 0) {
-        throw new Error('npm failed with code of ' + res.status);
+    // Run npm install.
+    shell.pushd(partialPath);
+    try {
+        var cmdline = '"' + npmPath + '" install ' + name + '@' + version;
+        var result = cp.execSync(cmdline);
+        gutil.log(result.toString());
+        if (result.status > 0) {
+            throw new Error('npm failed with exit code ' + result.status);
+        }
+    }
+    finally {
+        shell.popd();
     }
 
-    fs.writeFileSync(completedPath, '');
+    // Move the intermediate directory to the target location.
+    shell.mv(partialPath, targetPath);
 }
 
 var QExec = function (commandLine) {
